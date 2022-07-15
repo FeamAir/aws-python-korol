@@ -1,0 +1,94 @@
+service: aws-python-korol
+
+frameworkVersion: '3'
+
+custom:
+  domainName: ${opt:stage, self:provider.stage}.perfsys.cf
+  hosted_zonaID: "Z0836271TEULZNK0FS42"
+  ssl_arn: "arn:aws:acm:us-east-1:670726858704:certificate/c4651d62-e78e-4baf-a533-26bce68df147"
+
+provider:
+  name: aws
+  stage: python-korol
+  runtime: python3.8
+  iam:
+    # configure the role that will be created by Serverless (simplest):
+    role:
+      # Add statements to the IAM role to give permissions to Lambda functions
+      statements:
+        - Effect: Allow
+          Action:
+            - 'dynamodb:*'
+          Resource:
+            Fn::GetAtt: [ Links, Arn ]
+
+  environment:
+    TABLE_NAME: ${self:service}-${sls:stage}-links
+    DNS_RECORD: !Join
+      - ""
+      - - "https://"
+        - ${self:custom.domainName}
+        - "/link/"
+
+functions:
+  create:
+    handler: src.create.handler
+    events:
+      # REST API endpoint (API Gateway v1)
+      - http:
+          # Path for this endpoint
+          path: link
+          method: post
+
+  read:
+    handler: src.read.handler
+    events:
+      # REST API endpoint (API Gateway v1)
+      - http:
+          # Path for this endpoint
+          path: link/{url_id}
+          method: get
+
+resources:
+  Resources:
+    Links:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.TABLE_NAME}
+        AttributeDefinitions:
+          - AttributeName: url_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: url_id
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+
+    myDomainName:
+      Type: 'AWS::ApiGateway::DomainName'
+      Properties:
+        CertificateArn: ${self:custom.ssl_arn}
+        DomainName: ${self:custom.domainName}
+
+    myMapping:
+      Type: 'AWS::ApiGateway::BasePathMapping'
+      DependsOn:
+        - myDomainName
+      Properties:
+        BasePath: ""
+        Stage: ${opt:stage, self:provider.stage}
+        DomainName: ${self:custom.domainName}
+        RestApiId: !Ref ApiGatewayRestApi
+
+    ApiRoute53Record:
+      Type: AWS::Route53::RecordSetGroup
+      Properties:
+        HostedZoneId: ${self:custom.hosted_zonaID}
+        RecordSets:
+          - Name: ${self:custom.domainName}
+            Type: A
+            AliasTarget:
+              HostedZoneId: !GetAtt myDomainName.DistributionHostedZoneId
+              DNSName: !GetAtt myDomainName.DistributionDomainName
+
